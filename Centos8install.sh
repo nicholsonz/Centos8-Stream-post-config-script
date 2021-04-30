@@ -1,7 +1,7 @@
 #!/bin/bash
 
 ##########################################################
-# Automated Centos 7 server installation and configuration
+# Automated Centos 8 server post install configuration
 ##########################################################
 
 # Set variables
