@@ -137,6 +137,47 @@ rsync -arv $bkpdir/var/www/ /var/www
 
 echo
 
+# Mariadb config
+
+echo "Begin Mariadb configuration"
+echo
+
+mysql --user=root <<_EOF_
+GRANT ALL PRIVILEGES ON *.* TO '$dbuser'@'localhost' IDENTIFIED BY '$dbpasswd';
+_EOF_
+
+## Gunzip latest database backup sql.gz file for each databse and restore the database
+
+echo "Listing of backed up databases:"
+echo "$(ls $bkpdir/sql)"
+echo "-------------------------------------"
+echo "Name of databases seperated by spaces to restore?"
+read -p 'databases: ' dbases
+
+for dbase in $dbases
+ do
+
+DIR="/mnt/backup/sql/${dbase}/"
+NEWEST=`ls -tr1d "${DIR}/"*.gz 2>/dev/null | tail -1`
+TODAY=$(date +"%a")
+
+mysql --user=root -e "CREATE DATABASE $dbase DEFAULT CHARACTER SET utf8";
+
+  if [ ! -f "*.sql" ] ; then
+   gunzip -f ${NEWEST}
+   mysql --user=root "$dbase" < $DIR/$TODAY.sql
+else
+    echo "The .sql file already exists for this $dbase"
+
+fi
+done
+
+echo "Securing SQL installation"
+mysql_secure_installation
+
+echo 
+
+
 # Postfix and Dovecot configuration
 
 echo "***Begin Postfix/Dovecot configuration***"
