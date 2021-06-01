@@ -15,9 +15,11 @@ ip=10.10.10.10
 # find uuid of backup device for fstab entry: "sudo blkid | grep UUID"
 uuid=
 
+
 ###########################################################
-# Begin post install configuration
-###########################################################
+#
+#
+#### Configure Server ####
 
 # Set FQDN hostname
 hostnamectl set-hostname $srvrname
@@ -31,6 +33,11 @@ echo "$ip   $srvrname" >>/etc/hosts
 # Set SELINUX into permissive mode and permenantly disable
 setenforce 0
 sed -i 's/SELINUX=enforcing/SELINUX=disabled/' /etc/selinux/config
+
+###########################################################
+#
+#
+#### Install Packages ####
 
 # Firstly, update 
 dnf update -y
@@ -50,8 +57,9 @@ dnf install -y mariadb-server
 systemctl start mariadb
 
 # Extra packages
-dnf install -y lnav lm_sensors logwatch wget fail2ban fail2ban-systemd whois bash-completion NetworkManager-wifi NetworkManager-tui clamav clamav-update
+dnf install -y lnav lm_sensors logwatch wget fail2ban fail2ban-systemd whois bash-completion NetworkManager-wifi NetworkManager-tui clamav clamav-update smartmontools
 
+# create log file for fail2ban before starting up
 touch /var/log/fail2ban.log
 
 # Cockpit and related packages
@@ -65,17 +73,18 @@ dnf install -y php php-mysqlnd php-zip php-imap php-gd
 # all located in /var/www/html/.  just copy it and remember to put config file in /etc/httpd/conf.d of apache server
 
 # Postfix and Dovecot
-dnf install -y postfix postfix-mysql dovecot dovecot-mysql
-echo "Create virtual mail dir"
-mkdir /home/vmail
-mkdir /home/vmail/znicholson.net
-echo
+dnf install -y postfix postfix-mysql dovecot dovecot-mysql 
+
+# Install certbot 
+dnf install certbot python3-certbot-apache
+
+###########################################################
+#
+#
+#### Begin system package restoration and configuration ####
 
 
-# UPS battery backup software
-
-
-# Firewalld setup
+# Create holes in firewall
 firewall-cmd --permanent --add-service=imap
 firewall-cmd --permanent --add-service=imaps
 firewall-cmd --permanent --add-service=pop3
@@ -92,7 +101,7 @@ firewall-cmd --permanent --add-port=465/tcp
 firewall-cmd --reload
 
 
-# make backup directory, create fstab entry and mount the backup drive
+# Make backup directory, create fstab entry and mount the backup drive
 mkdir /mnt/backup
 echo UUID=$uuid  /mnt/backup  auto  defaults  0 0 >>/etc/fstab
 
@@ -128,15 +137,6 @@ else
 
 fi
 
-# restore config/dir files from backup or master server
-cp /etc/httpd/conf/httpd.conf /etc/httpd/conf/httpd.conf.bak
-rsync -arv $bkpdir/etc/httpd/conf/httpd.conf /etc/httpd/conf
-rsync -arv $bkpdir/etc/httpd/conf.d/ /etc/httpd/conf.d
-#rsync -arv $bkpdir/etc/httpd/conf.modules.d/ /etc/httpd/conf.modules.d
-rsync -arv $bkpdir/var/www/ /var/www
-
-echo
-
 # Mariadb config
 
 echo "Begin Mariadb configuration"
@@ -149,17 +149,18 @@ _EOF_
 ## Gunzip latest database backup sql.gz file for each databse and restore the database
 
 echo "Listing of backed up databases:"
-echo "$(ls $bkpdir/sql)"
+echo "$(ls -I "*.log" $bkpdir/sql)"
 echo "-------------------------------------"
 echo "Name of databases seperated by spaces to restore?"
 read -p 'databases: ' dbases
 
 for dbase in $dbases
  do
-
-DIR="/mnt/backup/sql/${dbase}/"
+# adjust these variables for your setup
+DIR="$bkpdir/sql/${dbase}/"
 NEWEST=`ls -tr1d "${DIR}/"*.gz 2>/dev/null | tail -1`
 TODAY=$(date +"%a")
+#####################
 
 mysql --user=root -e "CREATE DATABASE $dbase DEFAULT CHARACTER SET utf8";
 
@@ -175,17 +176,22 @@ done
 echo "Securing SQL installation"
 mysql_secure_installation
 
-echo 
-
+# restore config/dir files from backup or master server
+cp /etc/httpd/conf/httpd.conf /etc/httpd/conf/httpd.conf.bak
+rsync -arv $bkpdir/etc/httpd/conf/httpd.conf /etc/httpd/conf
+rsync -arv $bkpdir/etc/httpd/conf.d/ /etc/httpd/conf.d
+rsync -arv $bkpdir/var/www/ /var/www
 
 # Postfix and Dovecot configuration
 
-echo "***Begin Postfix/Dovecot configuration***"
-echo
+echo "Create virtual mail dir"
+mkdir /home/vmail
+mkdir /home/vmail/znicholson.net
 
 # import config files for mail server
 rsync -arv $bkpdir/etc/dovecot/ /etc/dovecot
 rsync -arv $bkpdir/etc/postfix/ /etc/postfix
+
 
 # configure permissions and users for postfix/dovecot
 chmod 640 /etc/postfix/database-domains.cf
@@ -195,9 +201,6 @@ chown root:postfix /etc/postfix/database-domains.cf
 chown root:postfix /etc/postfix/database-users.cf
 chown root:postfix /etc/postfix/database-alias.cf
 
-systemctl restart postfix
-
-
 groupadd -g 6000 vmail
 useradd -g vmail -u 6000 vmail -d /home/vmail -m
 
@@ -205,15 +208,14 @@ chown -R vmail:vmail /home/vmail
 chown -R vmail:dovecot /etc/dovecot
 chown -R -o-rwx /etc/dovecot
 
-echo
 
+# miscellaneous file restoration
 
-echo "Perform file restoration"
-echo
+rsync -arv $bkpdir/home/$adminUser/ /home/$adminUser
 rsync -arv $bkpdir/etc/logwatch/ /etc/logwatch
 rsync -arv $bkpdir/etc/fail2ban/ /etc/fail2ban
 rsync -arv $bkpdir/etc/php.ini /etc
-rsync -arv $bkpdir /srv/ /srv
+rsync -arv $bkpdir/srv/ /srv
 
 # Webmin installation
 #{
@@ -227,10 +229,10 @@ rsync -arv $bkpdir /srv/ /srv
 #rpm --import http://www.webmin.com/jcameron-key.asc
 #yum install -y webmin
 
-# Install certbot and get certificate
-# add crontab entry "/usr/bin/certbot renew"
-dnf install certbot python3-certbot-apache
-certbot certonly --apache
+
+# restore letsencrypt certificates
+rsync -arv $bkpdir/etc/letsencrypt/ /etc/letsencrypt
+# or run certbot certonly --apache to create new certs
 
 # Start and enable services
 systemctl start httpd
@@ -245,17 +247,20 @@ systemctl start  cockpit.socket
 systemctl enable cockpit.socket
 systemctl start fail2ban
 systemctl enable fail2ban
+systemctl start clamav-freshclam
+systemctl enable clamav-freshclam
+
 
 # Install NetData
 #bash <(curl -Ss https://my-netdata.io/kickstart.sh)
 
-# Cronjobs
+# Restore cronjobs
 rsync -arv $bkpdir/etc/cron.daily/ /etc/cron.daily
 cp $bkpdir/home/zach/root.crontab /var/spool/cron
 mv /var/spool/cron/root.crontab /var/spool/cron/root
 chmod 600 /var/spool/cron/root
 
-# RKHunter
+# RKHunter installation and update
 dnf install -y rkhunter
 rkhunter --update
 rkhunter --propupd
